@@ -84,9 +84,17 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     mail: MailSettings = Field(default_factory=MailSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
-    
+
     # Genel ayarlar
     os_security_key: str = Field(..., env="OS_SECURITY_KEY")
+    agent_run_timeout_seconds: int = Field(
+        default=60,
+        env="AGENT_RUN_TIMEOUT_SECONDS",
+        description=(
+            "Agent çağrılarının en fazla beklenmesine izin verilen süre (saniye). "
+            "Yoğun trafik altında uzun süren isteklerin kuyruğu tıkamasını önler."
+        ),
+    )
     
     # Legacy properties (geriye uyumluluk için)
     @property

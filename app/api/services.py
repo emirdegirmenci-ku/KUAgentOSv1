@@ -2,7 +2,9 @@
 """
 Business logic and helper functions for API.
 """
+import asyncio
 import logging
+from copy import deepcopy
 from typing import Any, Dict, Optional, Tuple, Union, AsyncGenerator
 
 from agno.agent import RunOutput
@@ -12,6 +14,7 @@ from app.agents.satinalma_agent import SatinalmaReply
 from app.api.schemas import ChatMessageRequest, ChatMessageResponse
 from app.configs.agent_ids import AgentID
 from app.configs.exceptions import ModelProviderError
+from app.configs.settings import settings
 
 # Logger ayarla
 logger = logging.getLogger(__name__)
@@ -46,6 +49,30 @@ CONFIRMATION_HINT = (
     "Mail taslağını göndermemi istiyorsan 'gönder' veya 'onaylıyorum' yazman yeterli. "
     "Revize etmek için talimat verebilirsin."
 )
+
+
+def _clone_agent(agent: Any) -> Any:
+    """Create an isolated copy of an agent for per-request execution.
+
+    The global agent instances keep shared configuration (DB, tools, instructions),
+    but some attributes like ``output_schema`` are mutated for streaming calls. To
+    avoid cross-request interference we run agents on a shallow copy. ``model_copy``
+    (pydantic v2) is preferred when available; otherwise we fall back to
+    ``deepcopy`` while preserving underlying shared resources.
+    """
+
+    if hasattr(agent, "model_copy"):
+        try:
+            return agent.model_copy(deep=True)
+        except Exception:
+            logger.debug("model_copy deep clone failed; falling back to deepcopy")
+
+    try:
+        return deepcopy(agent)
+    except Exception:
+        logger.warning("Agent copy failed; using shared instance (risk of shared state)")
+        return agent
+
 
 def _normalize_message(text: str) -> str:
     return text.strip().lower()
@@ -93,6 +120,7 @@ async def run_agent(
     user_id: str,
     session_id: str,
     stream: bool = False,
+    timeout_seconds: Optional[float] = None,
 ) -> Union[RunOutput, AsyncGenerator]:
     """
     Agent'ı asenkron çalıştırır ve sonucu döndürür.
@@ -102,6 +130,9 @@ async def run_agent(
         message: Gönderilecek mesaj
         user_id: Kullanıcı ID
         session_id: Session ID
+        stream: Streaming yanıt istenip istenmediği
+        timeout_seconds: Opsiyonel özel zaman aşımı (saniye). Belirtilmezse
+            `settings.agent_run_timeout_seconds` kullanılır.
     
     Returns:
         RunOutput: Agent çıktısı
@@ -110,41 +141,65 @@ async def run_agent(
         ModelProviderError: Model sağlayıcı hatası durumunda
     """
     try:
+        timeout = timeout_seconds or settings.agent_run_timeout_seconds
+        agent_instance = _clone_agent(agent)
+
         logger.info(
-            f"Running agent: {agent.id} | user_id: {user_id} | session_id: {session_id}"
+            f"Running agent: {agent_instance.id} | user_id: {user_id} | session_id: {session_id}"
         )
         if stream:
-            logger.info(f"Running agent in stream mode: {agent.id}")
+            logger.info(f"Running agent in stream mode: {agent_instance.id}")
 
-            original_output_schema = getattr(agent, "output_schema", None)
-            original_response_model = getattr(agent, "response_model", None)
+            if hasattr(agent_instance, "output_schema"):
+                agent_instance.output_schema = None
+            if hasattr(agent_instance, "response_model"):
+                agent_instance.response_model = None
 
-            agent.output_schema = None
-            if hasattr(agent, "response_model"):
-                agent.response_model = None
+            raw_stream = agent_instance.arun(
+                input=message,
+                user_id=user_id,
+                session_id=session_id,
+                stream=True,
+            )
 
-            try:
-                result = agent.arun(
-                    input=message,
-                    user_id=user_id,
-                    session_id=session_id,
-                    stream=True,
-                )
-                return result
-            finally:
-                agent.output_schema = original_output_schema
-                if hasattr(agent, "response_model"):
-                    agent.response_model = original_response_model
+            async def _stream_with_timeout():
+                try:
+                    async with asyncio.timeout(timeout):
+                        async for chunk in raw_stream:
+                            yield chunk
+                except asyncio.TimeoutError as exc:
+                    logger.error(
+                        f"Agent stream timed out: {agent_instance.id} | session_id: {session_id}"
+                    )
+                    raise ModelProviderError(
+                        message="Model zaman aşımına uğradı",
+                        detail="Streaming cevabı belirtilen süre içinde tamamlanamadı",
+                    ) from exc
 
-        run: RunOutput = await agent.arun(
-            input=message,
-            user_id=user_id,
-            session_id=session_id,
-        )
-        logger.info(f"Agent run completed: {agent.id}")
+            return _stream_with_timeout()
+
+        async with asyncio.timeout(timeout):
+            run: RunOutput = await agent_instance.arun(
+                input=message,
+                user_id=user_id,
+                session_id=session_id,
+            )
+        logger.info(f"Agent run completed: {agent_instance.id}")
         return run
+    except asyncio.TimeoutError as exc:
+        logger.error(
+            f"Agent run timed out: {getattr(agent_instance, 'id', 'unknown')} | "
+            f"session_id: {session_id}"
+        )
+        raise ModelProviderError(
+            message="Model zaman aşımına uğradı",
+            detail="Cevap süresi belirlenen sınırı aştı",
+        ) from exc
     except Exception as e:
-        logger.error(f"Agent run failed: {agent.id} | Error: {str(e)}", exc_info=True)
+        logger.error(
+            f"Agent run failed: {getattr(agent, 'id', 'unknown')} | Error: {str(e)}",
+            exc_info=True,
+        )
         raise ModelProviderError(
             message="Model çalıştırılamadı",
             detail=str(e),
