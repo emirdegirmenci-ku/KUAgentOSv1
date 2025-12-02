@@ -1,0 +1,2 @@
+{"timestamp": "2025-11-28T12:35:01.672762Z", "event": "start_chat_request", "payload": {"user_id": "test_user", "message": "satınalma prosedürü nedir?"}}
+{"timestamp": "2025-11-28T12:35:01.675345Z", "event": "start_chat_response", "payload": {"assigned_agent_id": "satinalma-pdf-agent", "assigned_agent_name": "Satınalma Asistanı", "routing_reason": "test routing", "reply": "Merhaba, size nasıl yardımcı olabilirim?"}}

@@ -1,0 +1,4 @@
+{"timestamp": "2025-11-28T10:45:43.982085Z", "event": "start_chat_request", "payload": {"user_id": "tester", "message": "Merhaba"}}
+{"timestamp": "2025-11-28T10:45:43.983731Z", "event": "start_chat_response", "payload": {"assigned_agent_id": "satinalma-pdf-agent", "assigned_agent_name": "Satınalma Asistanı", "routing_reason": "test", "reply": "Test cevap"}}
+{"timestamp": "2025-11-28T10:45:43.988579Z", "event": "chat_message_request", "payload": {"agent_id": "satinalma-pdf-agent", "user_id": "tester", "message": "Devam"}}
+{"timestamp": "2025-11-28T10:45:43.988579Z", "event": "chat_message_response", "payload": {"agent_id": "satinalma-pdf-agent", "reply": "Test cevap", "email_triggered": false, "email_info": null, "structured_output": {"reply": "Test cevap", "email_intent": false, "email_recipient_hint": "satinalma", "email_subject_suggestion": "Test Konu", "email_body_suggestion": "Merhaba..."}}}
